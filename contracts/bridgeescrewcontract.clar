@@ -397,3 +397,91 @@
     (ok true)
   )
 )
+
+
+;; read only functions
+
+;; Get escrow details
+(define-read-only (get-escrow (escrow-id uint))
+  (map-get? escrows escrow-id)
+)
+
+;; Get escrow state
+(define-read-only (get-escrow-state (escrow-id uint))
+  (match (map-get? escrows escrow-id)
+    escrow (ok (get state escrow))
+    ERR_ESCROW_NOT_FOUND
+  )
+)
+
+;; Get milestone progress
+(define-read-only (get-milestone-progress (escrow-id uint))
+  (match (map-get? escrows escrow-id)
+    escrow (ok {
+      completed: (get milestones-completed escrow),
+      total: (get total-milestones escrow),
+      progress-percent: (/ (* (get milestones-completed escrow) u100) (get total-milestones escrow))
+    })
+    ERR_ESCROW_NOT_FOUND
+  )
+)
+
+;; Get user statistics
+(define-read-only (get-user-stats (user principal))
+  (default-to 
+    { escrows-created: u0, escrows-completed: u0, disputes: u0 }
+    (map-get? user-stats user)
+  )
+)
+
+;; Get arbitrator reputation
+(define-read-only (get-arbitrator-reputation (arbitrator principal))
+  (default-to
+    { total-cases: u0, successful-resolutions: u0, stake: u0 }
+    (map-get? arbitrator-reputation arbitrator)
+  )
+)
+
+;; Check if escrow can be released
+(define-read-only (can-release-escrow (escrow-id uint))
+  (match (map-get? escrows escrow-id)
+    escrow (ok (or 
+      (is-eq (get state escrow) STATE_DELIVERED)
+      (is-eq (get state escrow) STATE_ARBITRATED)
+    ))
+    ERR_ESCROW_NOT_FOUND
+  )
+)
+
+;; Check if escrow can be disputed
+(define-read-only (can-dispute-escrow (escrow-id uint))
+  (match (map-get? escrows escrow-id)
+    escrow (ok (and
+      (or (is-eq (get state escrow) STATE_FUNDED) (is-eq (get state escrow) STATE_DELIVERED))
+      (< block-height (+ (get timeout-at escrow) DISPUTE_TIMEOUT))
+    ))
+    ERR_ESCROW_NOT_FOUND
+  )
+)
+
+;; Check if escrow can be refunded
+(define-read-only (can-refund-escrow (escrow-id uint))
+  (match (map-get? escrows escrow-id)
+    escrow (ok (or
+      (and (> block-height (get timeout-at escrow)) (is-eq (get state escrow) STATE_FUNDED))
+      (is-eq (get state escrow) STATE_REFUNDED)
+    ))
+    ERR_ESCROW_NOT_FOUND
+  )
+)
+
+;; Get contract info
+(define-read-only (get-contract-info)
+  (ok {
+    next-escrow-id: (var-get next-escrow-id),
+    treasury-address: (var-get treasury-address),
+    emergency-pause: (var-get emergency-pause),
+    treasury-fee-bps: TREASURY_FEE_BPS,
+    arbitrator-fee-bps: ARBITRATOR_FEE_BPS
+  })
+)
