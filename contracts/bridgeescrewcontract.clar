@@ -100,7 +100,7 @@
     (
       (escrow-id (var-get next-escrow-id))
       (fee (calculate-total-fee amount))
-      (timeout-block (+ block-height DELIVERY_TIMEOUT))
+      (timeout-block (+ stacks-block-height DELIVERY_TIMEOUT))
     )
     (asserts! (not (var-get emergency-pause)) ERR_NOT_AUTHORIZED)
     (asserts! (> amount u0) ERR_INSUFFICIENT_FUNDS)
@@ -118,7 +118,7 @@
         amount: amount,
         fee: fee,
         state: STATE_PENDING,
-        created-at: block-height,
+        created-at: stacks-block-height,
         funded-at: none,
         delivered-at: none,
         disputed-at: none,
@@ -165,7 +165,7 @@
     (map-set escrows escrow-id
       (merge escrow {
         state: STATE_FUNDED,
-        funded-at: (some block-height)
+        funded-at: (some stacks-block-height)
       })
     )
     
@@ -196,7 +196,7 @@
       (merge escrow {
         milestones-completed: new-milestones,
         delivered-at: (if (is-eq new-milestones (get total-milestones escrow))
-                         (some block-height)
+                         (some stacks-block-height)
                          (get delivered-at escrow)),
         state: (if (is-eq new-milestones (get total-milestones escrow))
                   STATE_DELIVERED
@@ -250,7 +250,7 @@
     ;; Transfer remaining fee to treasury
     (if (> remaining-fee u0)
       (try! (as-contract (ft-transfer? sbtc remaining-fee tx-sender (var-get treasury-address))))
-      (ok true)
+      true
     )
     
     ;; Update escrow state
@@ -285,13 +285,13 @@
       (is-eq (get state escrow) STATE_FUNDED)
       (is-eq (get state escrow) STATE_DELIVERED)
     ) ERR_INVALID_STATE)
-    (asserts! (< block-height (+ (get timeout-at escrow) DISPUTE_TIMEOUT)) ERR_TIMEOUT_NOT_REACHED)
+    (asserts! (< stacks-block-height (+ (get timeout-at escrow) DISPUTE_TIMEOUT)) ERR_TIMEOUT_NOT_REACHED)
     
     ;; Update escrow state
     (map-set escrows escrow-id
       (merge escrow {
         state: STATE_DISPUTED,
-        disputed-at: (some block-height),
+        disputed-at: (some stacks-block-height),
         dispute-reason: (some reason)
       })
     )
@@ -318,7 +318,7 @@
     (asserts! (not (var-get emergency-pause)) ERR_NOT_AUTHORIZED)
     (asserts! (is-eq tx-sender (get arbitrator escrow)) ERR_NOT_AUTHORIZED)
     (asserts! (is-eq (get state escrow) STATE_DISPUTED) ERR_INVALID_STATE)
-    (asserts! (< block-height (+ (unwrap! (get disputed-at escrow) ERR_INVALID_STATE) CHALLENGE_WINDOW)) ERR_CHALLENGE_WINDOW_EXPIRED)
+    (asserts! (< stacks-block-height (+ (unwrap! (get disputed-at escrow) ERR_INVALID_STATE) CHALLENGE_WINDOW)) ERR_CHALLENGE_WINDOW_EXPIRED)
     
     ;; Update escrow state
     (map-set escrows escrow-id
@@ -352,7 +352,7 @@
     (asserts! (not (var-get emergency-pause)) ERR_NOT_AUTHORIZED)
     (asserts! (or
       ;; Timeout refund
-      (and (> block-height (get timeout-at escrow)) (is-eq (get state escrow) STATE_FUNDED))
+      (and (> stacks-block-height (get timeout-at escrow)) (is-eq (get state escrow) STATE_FUNDED))
       ;; Dispute refund
       (is-eq (get state escrow) STATE_REFUNDED)
       ;; Emergency refund by owner
@@ -458,7 +458,7 @@
   (match (map-get? escrows escrow-id)
     escrow (ok (and
       (or (is-eq (get state escrow) STATE_FUNDED) (is-eq (get state escrow) STATE_DELIVERED))
-      (< block-height (+ (get timeout-at escrow) DISPUTE_TIMEOUT))
+      (< stacks-block-height (+ (get timeout-at escrow) DISPUTE_TIMEOUT))
     ))
     ERR_ESCROW_NOT_FOUND
   )
@@ -468,7 +468,7 @@
 (define-read-only (can-refund-escrow (escrow-id uint))
   (match (map-get? escrows escrow-id)
     escrow (ok (or
-      (and (> block-height (get timeout-at escrow)) (is-eq (get state escrow) STATE_FUNDED))
+      (and (> stacks-block-height (get timeout-at escrow)) (is-eq (get state escrow) STATE_FUNDED))
       (is-eq (get state escrow) STATE_REFUNDED)
     ))
     ERR_ESCROW_NOT_FOUND
@@ -484,4 +484,49 @@
     treasury-fee-bps: TREASURY_FEE_BPS,
     arbitrator-fee-bps: ARBITRATOR_FEE_BPS
   })
+)
+
+
+;; private functions
+
+;; Calculate total fee for escrow
+(define-private (calculate-total-fee (amount uint))
+  (+ 
+    (/ (* amount TREASURY_FEE_BPS) u10000)
+    (/ (* amount ARBITRATOR_FEE_BPS) u10000)
+  )
+)
+
+;; Update user statistics
+(define-private (update-user-stats (user principal) (created uint) (completed uint) (disputes uint))
+  (let 
+    (
+      (current-stats (default-to 
+        { escrows-created: u0, escrows-completed: u0, disputes: u0 }
+        (map-get? user-stats user)
+      ))
+    )
+    (map-set user-stats user {
+      escrows-created: (+ (get escrows-created current-stats) created),
+      escrows-completed: (+ (get escrows-completed current-stats) completed),
+      disputes: (+ (get disputes current-stats) disputes)
+    })
+  )
+)
+
+;; Update arbitrator reputation
+(define-private (update-arbitrator-reputation (arbitrator principal) (successful bool))
+  (let 
+    (
+      (current-rep (default-to
+        { total-cases: u0, successful-resolutions: u0, stake: u0 }
+        (map-get? arbitrator-reputation arbitrator)
+      ))
+    )
+    (map-set arbitrator-reputation arbitrator {
+      total-cases: (+ (get total-cases current-rep) u1),
+      successful-resolutions: (+ (get successful-resolutions current-rep) (if successful u1 u0)),
+      stake: (get stake current-rep)
+    })
+  )
 )
